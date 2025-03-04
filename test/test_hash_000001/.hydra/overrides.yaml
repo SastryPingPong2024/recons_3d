@@ -1,0 +1,9 @@
+- video.source=/clifford-data/home/pingpong-daniel/robot_table_tennis/src/rally_clipper/Scoreboard-OCR/test/test_hash_000001
+- device=cuda:0
+- video.start_frame=-1
+- video.end_frame=-1
+- video.output_dir=/clifford-data/home/pingpong-daniel/robot_table_tennis/src/rally_clipper/Scoreboard-OCR/test/test_hash_000001
+- base_tracker=pose
+- phalp.low_th_c=0.8
+- phalp.small_w=25
+- phalp.small_h=50

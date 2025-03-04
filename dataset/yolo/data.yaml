@@ -1,0 +1,6 @@
+train: /home/dvij/cam-calib/dataset/yolo/images/train/
+val: /home/dvij/cam-calib/dataset/yolo/images/val/
+test: /home/dvij/cam-calib/dataset/yolo/images/test/
+
+nc: 1
+names: ["table"]
