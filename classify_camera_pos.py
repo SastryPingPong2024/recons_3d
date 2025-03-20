@@ -175,7 +175,7 @@ model_bb = YOLO(model_path)
 
 
 
-
+VIDEO_ID = 'video/' + VIDEO_ID
 if not os.path.isfile(video_path+'/'+VIDEO_ID+'.mp4'):
     print("Not a valid video path! Please modify path in parser.py --label_video_path")
     sys.exit(1)
@@ -283,11 +283,7 @@ def corner_label(event, x, y, flags, param):
 saved_success = False
 frame_no = 0
 _, image = cap.read()
-keypts_2d =  np.load(video_path + '/' + VIDEO_ID + '/' + VIDEO_ID + '_keypoints_2d.npy')
-
 # read json file
-with open(video_path + '/' + VIDEO_ID + '/' + VIDEO_ID + '_metadata.json') as f:
-    metadata = json.load(f)
 curr_id = 0
 pts_thres = 10
 # show_image(image, 0, info[0]['x'], info[0]['y'])
@@ -295,7 +291,10 @@ results = []
 new_frames = []
 prev_result = None
 initial_frame_no = -1
-for frame_no in tqdm(range(n_frames)):
+
+side = [0, 0, 0]
+
+for frame_no in tqdm(range(0,n_frames,n_frames//20)):
     t1 = time.time()
     image = go2frame(cap, frame_no, info)
     curr_result = {}
@@ -317,46 +316,31 @@ for frame_no in tqdm(range(n_frames)):
             r = bounding_boxes[0][2] + margin
             t = bounding_boxes[0][1] - margin
             d = bounding_boxes[0][3] + margin
-            while curr_id<len(metadata) and int(metadata[curr_id]['frame']) < frame_no-initial_frame_no:
-                curr_id += 1 
-            n_intersections = 0
             image, l, r, t, d, corners = get_corners(model, image, l, r, t, d)
-            t3 = time.time()
-            print("Time taken for corner detection: ", t3-t2)
-            while curr_id<len(metadata) and int(metadata[curr_id]['frame']) == frame_no-initial_frame_no:
-                pts = keypts_2d[curr_id]
-                # print(pts)
-                for pt in pts:
-                    x = int(pt[0]/2.25)
-                    y = int(pt[1]/2.25)
-                    if x > bounding_boxes[0][0] and x < bounding_boxes[0][2] and y > bounding_boxes[0][1] and y < bounding_boxes[0][3]:
-                        n_intersections += 1
-                    cv2.circle(image, (x, y), 3, (0, 255, 0), -1)
-                curr_id += 1
-            print("intersections: ", n_intersections)
-            if n_intersections < pts_thres:
-                print("Running detections", n_intersections)
-                # Convert corners to int array
-                corners = np.array(corners, dtype=np.int32)
-                cv2.rectangle(image, (l, t), (r, d), (0, 255, 0), 2)
-                # print(image.shape)
-                camera_matrix, rvecs, tvecs = get_calib_mat(corners, (image.shape[1], image.shape[0]))
+            print("Running detections")
+            corners = np.array(corners, dtype=np.int32)
+            cv2.rectangle(image, (l, t), (r, d), (0, 255, 0), 2)
+            # print(image.shape)
+            camera_matrix, rvecs, tvecs = get_calib_mat(corners, (image.shape[1], image.shape[0]))
+            xb_min = corners[0,0]
+            xb_max = corners[2,0]
+            xt_min = corners[5,0]
+            xt_max = corners[3,0]
+            br_f = (xb_max-xt_min)/((xb_max-xb_min)/2. + (xt_max-xt_min)/2.)
+            bl_f = (xt_max-xb_min)/((xb_max-xb_min)/2. + (xt_max-xt_min)/2.)
+            if br_f < 0.9 :
+                side[2] += 1
+            elif bl_f < 0.9 :
+                side[0] += 1
             else :
-                if prev_result is not None and prev_result['cam_mat'] is not None:
-                    camera_matrix = prev_result['cam_mat'].copy()
-                    rvecs = prev_result['rvecs']
-                    tvecs = prev_result['tvecs']
-                else :
-                    camera_matrix = None
-                    rvecs = None
-                    tvecs = None
+                side[2] += 1
             curr_result['cam_mat'] = camera_matrix
             curr_result['rvecs'] = rvecs
             curr_result['tvecs'] = tvecs
             if camera_matrix is not None :
                 image = draw_calib_lines(image, camera_matrix, rvecs, tvecs)
             t4 = time.time()
-            print("Time taken for calibration: ", t4-t3)
+            
         else :
             if prev_result is not None and prev_result['cam_mat'] is not None:
                 curr_result['cam_mat'] = prev_result['cam_mat'].copy()
@@ -374,43 +358,6 @@ for frame_no in tqdm(range(n_frames)):
     results.append(curr_result)
 
 
-
-first_cam_mat = None
-first_rvecs = None
-first_tvecs = None
-for result in results:
-    if result['cam_mat'] is None :
-        continue
-    first_cam_mat = result['cam_mat']
-    first_rvecs = result['rvecs']
-    first_tvecs = result['tvecs']
-    break
-k = 0
-for result in results:
-    # print(result['cam_mat'])
-    if result['cam_mat'] is None :
-        print(k)
-        results[k]['cam_mat'] = first_cam_mat.copy()
-        results[k]['rvecs'] = first_rvecs
-        results[k]['tvecs'] = first_tvecs
-        image = draw_calib_lines(new_frames[k], first_cam_mat, first_rvecs, first_tvecs)
-        new_frames[k] = image.copy()
-        k+=1
-    else :
-        break
-
-# save new_frames in a video mp4 format
-height, width, layers = new_frames[0].shape
-size = (width, height)
-
-# Create folder video_path/calib if it doesn't exist
-if not os.path.exists(video_path + '/calib'):
-    os.makedirs(video_path + '/calib')
-out = cv2.VideoWriter(video_path + '/calib/' + VIDEO_ID + '_calib.mp4', cv2.VideoWriter_fourcc(*'mp4v'), fps, size)
-for i in range(len(new_frames)):
-    out.write(new_frames[i])
-out.release()
-
-# save results in a pkl file
-with open(video_path + '/calib/' + VIDEO_ID + '_calib.pkl', 'wb') as f:
-    pickle.dump(results, f)
+print(video_path + VIDEO_ID + '_view.txt')
+os.makedirs(video_path + '/metadata/',exist_ok=True)
+np.savetxt(video_path + '/metadata/' + VIDEO_ID + '_view.txt', np.array(side))
