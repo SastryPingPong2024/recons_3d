@@ -6,8 +6,8 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 from tqdm import tqdm
 import json
-import cvxpy as cp
 import casadi as ca
+import pickle
 
 L = 2.74  # Length
 B = 1.525  # Breadth
@@ -17,6 +17,8 @@ h = 0.1525  # Height of net
 forgiveness = 1
 EPS = 0.01
 RIGHT_HAND = 4
+SEGMENT_LEN_THRES = 0.3
+SIGN_THRES = 0.
 
 def find_closest_projected_3d_point(camera_matrix, rvecs, tvecs, image_point, query_point):
     """
@@ -54,7 +56,7 @@ def find_closest_projected_3d_point(camera_matrix, rvecs, tvecs, image_point, qu
 
     return closest_point
 
-def project_3d_to_2d_casadi(camera_matrix, rvecs, tvecs, world_points):
+def project_3d_to_2d_casadi(camera_matrix, rvecs, tvecs, world_points, p=False):
     """
     world_points has cvxpy variables, project those points to 2d image plane
     """
@@ -64,7 +66,8 @@ def project_3d_to_2d_casadi(camera_matrix, rvecs, tvecs, world_points):
     rotated = rot_mat @ world_points
     # print(rotated)
     image_points = camera_matrix @ (rotated + tvecs[0])
-    # print(image_points)
+    if p :
+        print(image_points[2])
     image_points = image_points[:2]/image_points[2]
     return image_points
 
@@ -95,6 +98,13 @@ calib_results = np.load(video_path + '/calib/' + VIDEO_ID + '_calib.pkl', allow_
 
 # ignore first line in np.loadtxt
 ball_track_results = np.loadtxt(video_path + '/ball_tracker/' + VIDEO_ID + '_ball.csv', delimiter=',', skiprows=1)
+# ball_track_results = np.loadtxt(video_path + '/metadata/second_clip_indices.txt', delimiter=',', skiprows=1)
+
+# Read second_clip_indices.txt for start and end frame of ball_track_results
+clip_indices = np.loadtxt(video_path + '/metadata/second_clip_indices.txt', delimiter=',', max_rows=1)
+
+ball_track_results = ball_track_results[int(clip_indices[0]):int(clip_indices[1])]
+
 BTR_N = ball_track_results.shape[0]-1
 while ball_track_results[BTR_N,1] == 0:
     BTR_N -= 1
@@ -153,11 +163,12 @@ valid_right_segments = []
 curr_forgiveness = forgiveness
 for i in range(1,len(plane_points)) :
     pt = plane_points[i]
+    print(i, curr_status, pt)
     if pt[0] > prev_pt[0] + EPS:
         if curr_status == -1 :
             segments.append([start_i, i])
-            segment_length_x = start_pt[0] - pt[0]
-            if segment_length_x > .5 and pt[0]*start_pt[0] < 0.:
+            segment_length_x = start_pt[0] - prev_pt[0]
+            if segment_length_x > SEGMENT_LEN_THRES and prev_pt[0]*start_pt[0] < SIGN_THRES:
                 valid_left_segments.append([start_i, i])
             
             start_pt = pt
@@ -168,8 +179,8 @@ for i in range(1,len(plane_points)) :
     elif pt[0] < prev_pt[0] - EPS:
         if curr_status == 1 :
             segments.append([start_i, i])
-            segment_length_x = pt[0] - start_pt[0]
-            if segment_length_x > .5 and pt[0]*start_pt[0] < 0.:
+            segment_length_x = prev_pt[0] - start_pt[0]
+            if segment_length_x > SEGMENT_LEN_THRES and prev_pt[0]*start_pt[0] < SIGN_THRES:
                 valid_right_segments.append([start_i, i])
             
             start_pt = pt
@@ -183,12 +194,12 @@ for i in range(1,len(plane_points)) :
             continue
         segments.append([start_i, i])
         if curr_status == -1 :
-            segment_length_x = start_pt[0] - pt[0]
-            if segment_length_x > .5 and pt[0]*start_pt[0] < 0.:
+            segment_length_x = start_pt[0] - prev_pt[0]
+            if segment_length_x > .5 and prev_pt[0]*start_pt[0] < 0.:
                 valid_left_segments.append([start_i, i])
         if curr_status == 1 :
-            segment_length_x = pt[0] - start_pt[0]
-            if segment_length_x > .5 and pt[0]*start_pt[0] < 0.:
+            segment_length_x = prev_pt[0] - start_pt[0]
+            if segment_length_x > .5 and prev_pt[0]*start_pt[0] < 0.:
                 valid_right_segments.append([start_i, i])
         start_pt = pt
         start_i = i
@@ -212,12 +223,13 @@ RESULTS = {}
 RESULTS['valid_left_segments'] = valid_left_segments
 RESULTS['valid_right_segments'] = valid_right_segments
 RESULTS['segments'] = segments
-
-keypts_2d =  np.load(video_path + '/' + VIDEO_ID + '/' + VIDEO_ID + '_keypoints_2d.npy')
-keypts_3d =  np.load(video_path + '/' + VIDEO_ID + '/' + VIDEO_ID + '_keypoints_3d.npy')
+print(valid_left_segments, valid_right_segments)
+# exit(0)
+keypts_2d =  np.load(video_path + '/human_pose_tracker/4DHumans/' + VIDEO_ID + '/' + VIDEO_ID + '_keypoints_2d.npy')
+keypts_3d =  np.load(video_path + '/human_pose_tracker/4DHumans/' + VIDEO_ID + '/' + VIDEO_ID + '_keypoints_3d.npy')
 
 # read json file
-with open(video_path + '/' + VIDEO_ID + '/' + VIDEO_ID + '_metadata.json') as f:
+with open(video_path + '/human_pose_tracker/4DHumans/' + VIDEO_ID + '/' + VIDEO_ID + '_metadata.json') as f:
     metadata = json.load(f)
 
 
@@ -250,7 +262,7 @@ def optimize_ball_bounce(ball_poses_2d,start_3d,end_3d,cam_mat,rvecs,tvecs,fps=3
         opti.set_initial(ball_bounce_loc, np.array([-L/4.,0.]))
     else :
         opti.set_initial(ball_bounce_loc, np.array([L/4.,0.]))
-    opti.set_initial(ball_bounce_loc, np.array([0.,0.]))
+    # opti.set_initial(ball_bounce_loc, np.array([0.,0.]))
     if start_3d[0] > end_3d[0] :
         opti.subject_to(ball_bounce_loc[0] >= -L/2)
         opti.subject_to(ball_bounce_loc[0] <= 0.)
@@ -274,10 +286,12 @@ def optimize_ball_bounce(ball_poses_2d,start_3d,end_3d,cam_mat,rvecs,tvecs,fps=3
     
     # Cost function
     cost = 0
-    for i in range(N):
+    print(start_3d, end_3d)
+    for i in range(1,N-1):
+        # print(ball_poses_2d[i, 2:])
         ball_pos_2d = ca.MX(ball_poses_2d[i, 2:])
         curr_t = i * dt
-        step_val = 1.0 / (1.0 + ca.exp(-100.0 * (curr_t - ball_bounce_t)))
+        step_val = 1.0 / (1.0 + ca.exp(-1000.0 * (curr_t - ball_bounce_t)))
         
         ball_pos_3d_ = ca.vertcat(
             start_3d[0] + ball_vel_x * curr_t,
@@ -293,7 +307,6 @@ def optimize_ball_bounce(ball_poses_2d,start_3d,end_3d,cam_mat,rvecs,tvecs,fps=3
             ball_bounce_loc[1] + ball_bounce_vel_y * (curr_t - ball_bounce_t),
             HT + ball_bounce_vel_z * (curr_t - ball_bounce_t) - 0.5 * g * (curr_t - ball_bounce_t)**2
         )
-        
         ball_pos_2d__ = project_3d_to_2d_casadi(cam_mat, rvecs, tvecs, ball_pos_3d__)
         cost += step_val * ca.norm_2(ball_pos_2d - ball_pos_2d__)
     
@@ -350,9 +363,12 @@ def optimize_ball_bounce(ball_poses_2d,start_3d,end_3d,cam_mat,rvecs,tvecs,fps=3
 
 curr_id = 0
 initial_frame_no = 0
-cap = cv2.VideoCapture(video_path+'/ball_tracker/'+VIDEO_ID+'.mp4')
+cap = cv2.VideoCapture(video_path+'/video_second_clipped/'+VIDEO_ID+'.mp4')
+cap.set(1,10)
+_, image = cap.read()
 fps = int(cap.get(cv2.CAP_PROP_FPS))
 n_frames = BTR_N
+scale_factor = 800/image.shape[0]
 # print(n_frames)
 keypts_3d_rot = np.zeros_like(keypts_3d)
 for frame_no in tqdm(range(n_frames)):
@@ -363,7 +379,7 @@ for frame_no in tqdm(range(n_frames)):
         rot_mat = cv2.Rodrigues(rvecs[0])[0]
         keypts_rot = keypts @ rot_mat
         min_i = np.argmin(keypts_rot[:,2])
-        _2d_pt = keypts_2d[curr_id][min_i]/2.25
+        _2d_pt = keypts_2d[curr_id][min_i]/scale_factor
         ground_pt = cv2.perspectiveTransform(_2d_pt[None,None,:], np.linalg.inv(H_ground))[0]
         ground_pt_3d = np.array([ground_pt[0,0], ground_pt[0,1], 0.])
         keypts_rot = keypts_rot + ground_pt_3d[None,:] - keypts_rot[min_i:min_i+1]
@@ -418,7 +434,7 @@ for seg in valid_left_segments:
         n_players += 1
     left_player,right_player = get_left_right_players(keypts_3d_rot[curr_id:curr_id+n_players])
     print(left_player,right_player)
-    ball_pos_start_2d = keypts_2d[curr_id+right_player,RIGHT_HAND]/2.25
+    ball_pos_start_2d = keypts_2d[curr_id+right_player,RIGHT_HAND]/scale_factor
     ball_pos_start_3d = keypts_3d_rot[curr_id+right_player,RIGHT_HAND]
     ball_pos_start_3d_ = find_closest_projected_3d_point(camera_matrix, rvecs, tvecs, ball_track_results[fi,2:], ball_pos_start_3d)
     
@@ -431,7 +447,7 @@ for seg in valid_left_segments:
     left_player,right_player = get_left_right_players(keypts_3d_rot[curr_id:curr_id+n_players])
     print(left_player,right_player)
     
-    ball_pos_end_2d = keypts_2d[curr_id+left_player,RIGHT_HAND]/2.25
+    ball_pos_end_2d = keypts_2d[curr_id+left_player,RIGHT_HAND]/scale_factor
     ball_pos_end_3d = keypts_3d_rot[curr_id+left_player,RIGHT_HAND]
     ball_pos_end_3d_ = find_closest_projected_3d_point(camera_matrix, rvecs, tvecs, ball_track_results[fl-1,2:], ball_pos_end_3d)
     print(fl,ball_track_results.shape)
@@ -455,7 +471,7 @@ for seg in valid_right_segments:
     left_player,right_player = get_left_right_players(keypts_3d_rot[curr_id:curr_id+n_players])
     # print("right",left_player,right_player)
     
-    ball_pos_start_2d = keypts_2d[curr_id+left_player,RIGHT_HAND]/2.25
+    ball_pos_start_2d = keypts_2d[curr_id+left_player,RIGHT_HAND]/scale_factor
     ball_pos_start_3d = keypts_3d_rot[curr_id+left_player,RIGHT_HAND]
     # ball_pos_start_3d[2] /= 1.2
     ball_pos_start_3d_ = find_closest_projected_3d_point(camera_matrix, rvecs, tvecs, ball_track_results[fi,2:], ball_pos_start_3d)
@@ -469,7 +485,7 @@ for seg in valid_right_segments:
     left_player,right_player = get_left_right_players(keypts_3d_rot[curr_id:curr_id+n_players])
     print(left_player,right_player)
     
-    ball_pos_end_2d = keypts_2d[curr_id+right_player,RIGHT_HAND]/2.25
+    ball_pos_end_2d = keypts_2d[curr_id+right_player,RIGHT_HAND]/scale_factor
     ball_pos_end_3d = keypts_3d_rot[curr_id+right_player,RIGHT_HAND]
     print(fl,ball_track_results.shape)
     ball_pos_end_3d_ = find_closest_projected_3d_point(camera_matrix, rvecs, tvecs, ball_track_results[fl-1,2:], ball_pos_end_3d)
@@ -486,7 +502,10 @@ new_frames = []
 left_player_poses = []
 curr_id = 0
 initial_frame_no = 0
-for frame_no in tqdm(range(n_frames)):
+for frame_no_ in tqdm(range(n_frames)):
+    # cap.set(1, frame_no)
+    frame_no = 10
+    curr_id = 0
     cap.set(1, frame_no)
     ret, image = cap.read()
     while curr_id<len(metadata) and int(metadata[curr_id]['frame']) < frame_no-initial_frame_no:
@@ -508,7 +527,7 @@ for frame_no in tqdm(range(n_frames)):
         rot_mat = cv2.Rodrigues(rvecs[0])[0]
         keypts_rot = keypts @ rot_mat
         min_i = np.argmin(keypts_rot[:,2])
-        _2d_pt = keypts_2d[curr_id][min_i]/2.25
+        _2d_pt = keypts_2d[curr_id][min_i]/scale_factor
         # print(_2d_pt)
         cv2.circle(image, (int(_2d_pt[0]), int(_2d_pt[1])), 2, (0,255,0), 2)
         ground_pt = cv2.perspectiveTransform(_2d_pt[None,None,:], np.linalg.inv(H_ground))[0]
@@ -522,15 +541,21 @@ for frame_no in tqdm(range(n_frames)):
         # print(keypts.shape)
         # Project 3D points to 2D
         keypts = project_3d_to_2d(camera_matrix, rvecs, tvecs, keypts_rot)
-        print(frame_no, ground_pt_3d, np.argmin(keypts_rot[:,1]), np.argmax(keypts_rot[:,1]))
+        print(frame_no, ground_pt_3d, np.argmin(keypts_rot[:,1]), np.argmax(keypts_rot[:,1]), np.argmax(keypts_rot[:,1]), np.argmin(keypts_rot[:,1]), len(keypts_rot))
+        print(keypts_rot[:,:3])
         # print(keypts_rot[np.argmin(keypts_rot[:,1])], keypts_rot[np.argmax(keypts_rot[:,1])])
         color = (0, 0, 0)
         if player_no == left_player :
             color = (255,0,0)
         if player_no == right_player :
             color = (0,255,0)
+        keypt_no = 0
         for keypt in keypts:
-            cv2.circle(image, (int(keypt[0,0]), int(keypt[0,1])), 2, color, 2)
+            if keypt_no == frame_no_:
+                cv2.circle(image, (int(keypt[0,0]), int(keypt[0,1])), 2, (0,0,255), 2)
+            else :
+                cv2.circle(image, (int(keypt[0,0]), int(keypt[0,1])), 2, color, 2)
+            keypt_no += 1
         player_no += 1
         curr_id += 1
     left = False
@@ -596,9 +621,17 @@ for frame_no in tqdm(range(n_frames)):
         break
     new_frames.append(image)
 
+# create a folder to save the results
+if not os.path.exists(video_path + '/3d_recons'):
+    os.makedirs(video_path + '/3d_recons')
+
+# Save RESULTS as pkl file in video_path + '/3d_recons/' + VIDEO_ID + '_3d_recons.pkl'
+with open(video_path + '/3d_recons/' + VIDEO_ID + '_3d_recons.pkl', 'wb') as f:
+    pickle.dump(RESULTS, f)
+
 height, width, layers = new_frames[0].shape
 size = (width, height)
-out = cv2.VideoWriter(video_path+'/'+VIDEO_ID+'_rally_segment.mp4', cv2.VideoWriter_fourcc(*'mp4v'), fps, size)
+out = cv2.VideoWriter(video_path+'/3d_recons/'+VIDEO_ID+'_3d_recons.mp4', cv2.VideoWriter_fourcc(*'mp4v'), fps, size)
 for i in range(len(new_frames)):
     out.write(new_frames[i])
 out.release()

@@ -2,7 +2,7 @@ import os
 import cv2
 import sys, getopt
 # import parser 
-from utils import save_info, load_info, go2frame, show_image
+from utils import save_info, load_info, go2frame, show_image, nextframe
 import numpy as np
 import argparse
 import torch
@@ -21,16 +21,18 @@ B = 1.525  # Breadth
 H = 0.76  # Height
 d1 = 0.1525  # Distance from end to net
 h = 0.1525  # Height of net
+max_allowed_corner_discrepancy = 30
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--folder', default='_0pjrW7Viek', help='Location of target video file')
 parser.add_argument('--start_id', default=0, help='Start id for saving')
 
+
+DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 args = parser.parse_args()
 video_path = args.folder
 
 VIDEO_ID = video_path.split('/')[-1]
-print(VIDEO_ID)
 
 def calibrate_camera(image_points, world_points, image_size):
     """
@@ -119,15 +121,12 @@ def draw_3d_line_on_image(image, camera_matrix, rvecs, tvecs, point1, point2,col
     return image
 
 def get_calib_mat(image_points, image_size) :
-    # print(image_points)
     world_points = [(-L/2., B/2., H), (-L/2., 0, H), (-L/2., -B/2., H), (L/2., -B/2., H), (L/2., 0, H), (L/2., B/2., H),
                  (0, B/2.+d1, H), (0, B/2.+d1, H+h), (0, -B/2.-d1, H+h), (0, -B/2.-d1, H),]
                 # (10, 10, 0), (11, 11, 0)]
 
-    # print(world_points)
     
     camera_matrix, rvecs, tvecs = calibrate_camera(image_points[:-1], world_points[:-1], image_size)
-    # print(rvecs, tvecs)
     return camera_matrix, rvecs, tvecs
 
 def draw_calib_lines(image, camera_matrix, rvecs, tvecs):
@@ -153,9 +152,11 @@ def draw_calib_lines(image, camera_matrix, rvecs, tvecs):
     return image
 
 def run_inference(model, image):
-        
+    
+    # image = torch.tensor(image).to(DEVICE)
     # Run inference without printing anything
-    results = model(image)
+    results = model(image, verbose=False)
+    
     
     # Extract bounding boxes
     bboxes = []
@@ -170,14 +171,14 @@ def run_inference(model, image):
 model_path = "dataset/runs/detect/train/weights/best.pt"
 
 # Load the trained YOLO model
-model_bb = YOLO(model_path)
+model_bb = YOLO(model_path).to(DEVICE)
 
 
 
 
 
-if not os.path.isfile(video_path+'/'+VIDEO_ID+'.mp4'):
-    print("Not a valid video path! Please modify path in parser.py --label_video_path")
+if not os.path.isfile(video_path+'/video_second_clipped/'+VIDEO_ID+'.mp4'):
+    print("Not a valid video path! Please modify path in parser.py --folder")
     sys.exit(1)
 
 # create labels in dataset/train/labels folder and save images in dataset/train/images folder
@@ -185,10 +186,12 @@ if not os.path.isfile(video_path+'/'+VIDEO_ID+'.mp4'):
 # Where b: bottom, t: top, l: left, r: right, c: center
 
 # acquire video info
-cap = cv2.VideoCapture(video_path+'/'+VIDEO_ID+'.mp4')
+cap = cv2.VideoCapture(video_path+'/video_second_clipped/'+VIDEO_ID+'.mp4')
 fps = int(cap.get(cv2.CAP_PROP_FPS))
 n_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-print(n_frames)
+indices = np.loadtxt(video_path+'/metadata/second_clip_indices.txt', dtype=int, delimiter=',')
+n_frames = indices[1] - indices[0]
+# exit(0)
 # # # # # # # # # # # # # # # #
 # e: exit program             #
 # s: save info                #
@@ -255,7 +258,7 @@ def get_corners(model, image, l, r, t, d):
     image_ = image_ / 255.0
     image_ = image_.astype(np.float32)
     
-    pred_label = model(torch.tensor(image_).unsqueeze(0)).detach().cpu().numpy()
+    pred_label = model(torch.tensor(image_).to(DEVICE).unsqueeze(0)).detach().cpu().numpy()
     pred_label = pred_label.reshape(-1, 2)
     pred_label[:,0] = pred_label[:,0] * (r-l) + l
     pred_label[:,1] = pred_label[:,1] * (d-t) + t
@@ -283,32 +286,35 @@ def corner_label(event, x, y, flags, param):
 saved_success = False
 frame_no = 0
 _, image = cap.read()
-keypts_2d =  np.load(video_path + '/' + VIDEO_ID + '/' + VIDEO_ID + '_keypoints_2d.npy')
+keypts_2d =  np.load(video_path + '/human_pose_tracker/4DHumans/' + VIDEO_ID + '/' + VIDEO_ID + '_keypoints_2d.npy')
 
 # read json file
-with open(video_path + '/' + VIDEO_ID + '/' + VIDEO_ID + '_metadata.json') as f:
+with open(video_path + '/human_pose_tracker/4DHumans/' + VIDEO_ID + '/' + VIDEO_ID + '_metadata.json') as f:
     metadata = json.load(f)
+
+pred_corners = []
 curr_id = 0
-pts_thres = 10
+pts_thres = 50
 # show_image(image, 0, info[0]['x'], info[0]['y'])
 results = []
 new_frames = []
 prev_result = None
 initial_frame_no = -1
+model = model.to(DEVICE)
 for frame_no in tqdm(range(n_frames)):
-    t1 = time.time()
-    image = go2frame(cap, frame_no, info)
+    t0 = time.time()
+    # image = go2frame(cap, frame_no, info)
+    image = nextframe(cap)
     curr_result = {}
     curr_result['frame'] = frame_no 
     curr_result['cam_mat'] = None
     curr_result['rvecs'] = None
     curr_result['tvecs'] = None
     leave = 'y'
-    print(frame_no)
+    t1 = time.time()
     bounding_boxes = run_inference(model_bb, image)
     # print("Detected bounding boxes:", bounding_boxes)
     t2 = time.time()
-    print("Time taken for inference: ", t2-t1)
     try:
         if len(bounding_boxes) >= 1:
             if initial_frame_no == -1:
@@ -322,24 +328,21 @@ for frame_no in tqdm(range(n_frames)):
             n_intersections = 0
             image, l, r, t, d, corners = get_corners(model, image, l, r, t, d)
             t3 = time.time()
-            print("Time taken for corner detection: ", t3-t2)
             while curr_id<len(metadata) and int(metadata[curr_id]['frame']) == frame_no-initial_frame_no:
                 pts = keypts_2d[curr_id]
-                # print(pts)
+                factor = 800/720
                 for pt in pts:
-                    x = int(pt[0]/2.25)
-                    y = int(pt[1]/2.25)
+                    x = int(pt[0]/factor)
+                    y = int(pt[1]/factor)
                     if x > bounding_boxes[0][0] and x < bounding_boxes[0][2] and y > bounding_boxes[0][1] and y < bounding_boxes[0][3]:
                         n_intersections += 1
                     cv2.circle(image, (x, y), 3, (0, 255, 0), -1)
                 curr_id += 1
-            print("intersections: ", n_intersections)
             if n_intersections < pts_thres:
-                print("Running detections", n_intersections)
                 # Convert corners to int array
                 corners = np.array(corners, dtype=np.int32)
+                pred_corners.append(corners[:6])
                 cv2.rectangle(image, (l, t), (r, d), (0, 255, 0), 2)
-                # print(image.shape)
                 camera_matrix, rvecs, tvecs = get_calib_mat(corners, (image.shape[1], image.shape[0]))
             else :
                 if prev_result is not None and prev_result['cam_mat'] is not None:
@@ -356,7 +359,6 @@ for frame_no in tqdm(range(n_frames)):
             if camera_matrix is not None :
                 image = draw_calib_lines(image, camera_matrix, rvecs, tvecs)
             t4 = time.time()
-            print("Time taken for calibration: ", t4-t3)
         else :
             if prev_result is not None and prev_result['cam_mat'] is not None:
                 curr_result['cam_mat'] = prev_result['cam_mat'].copy()
@@ -373,7 +375,16 @@ for frame_no in tqdm(range(n_frames)):
     new_frames.append(image)
     results.append(curr_result)
 
+pred_corners = np.array(pred_corners)
+pred_corners_min = np.min(pred_corners, axis=0)
+pred_corners_max = np.max(pred_corners, axis=0)
+discrepancy = np.mean(np.linalg.norm(pred_corners_max - pred_corners_min, axis=1))
 
+print("Discrepancy is:", discrepancy)
+
+if discrepancy > max_allowed_corner_discrepancy:
+    print("Discrepancy in corner detection is too high. The video is most likely changing views")
+    exit(0)
 
 first_cam_mat = None
 first_rvecs = None
@@ -387,9 +398,7 @@ for result in results:
     break
 k = 0
 for result in results:
-    # print(result['cam_mat'])
     if result['cam_mat'] is None :
-        print(k)
         results[k]['cam_mat'] = first_cam_mat.copy()
         results[k]['rvecs'] = first_rvecs
         results[k]['tvecs'] = first_tvecs
@@ -404,13 +413,13 @@ height, width, layers = new_frames[0].shape
 size = (width, height)
 
 # Create folder video_path/calib if it doesn't exist
-if not os.path.exists(video_path + '/calib'):
-    os.makedirs(video_path + '/calib')
-out = cv2.VideoWriter(video_path + '/calib/' + VIDEO_ID + '_calib.mp4', cv2.VideoWriter_fourcc(*'mp4v'), fps, size)
+if not os.path.exists(video_path + '/calib__'):
+    os.makedirs(video_path + '/calib__')
+out = cv2.VideoWriter(video_path + '/calib__/' + VIDEO_ID + '_calib.mp4', cv2.VideoWriter_fourcc(*'mp4v'), fps, size)
 for i in range(len(new_frames)):
     out.write(new_frames[i])
 out.release()
 
 # save results in a pkl file
-with open(video_path + '/calib/' + VIDEO_ID + '_calib.pkl', 'wb') as f:
+with open(video_path + '/calib__/' + VIDEO_ID + '_calib.pkl', 'wb') as f:
     pickle.dump(results, f)

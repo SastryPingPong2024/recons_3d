@@ -283,5 +283,11 @@ def show_image(image, frame_no, data, show_text=False):
 def go2frame(cap, frame_no, data, show_text=False): 
     cap.set(1, frame_no)
     ret, image = cap.read()
-    image = show_image(image, frame_no, data, show_text=show_text)
+    # image = show_image(image, frame_no, data, show_text=show_text)
+    return image
+
+def nextframe(cap): 
+    # cap.set(1, frame_no)
+    ret, image = cap.read()
+    # image = show_image(image, frame_no, data, show_text=show_text)
     return image
