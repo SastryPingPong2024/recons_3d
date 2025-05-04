@@ -15,7 +15,7 @@ B = 1.525  # Breadth
 HT = 0.76  # Height
 d1 = 0.1525  # Distance from end to net
 h = 0.1525  # Height of net
-forgiveness = 1
+forgiveness = 4
 EPS = 0.01
 RIGHT_HAND = 4
 LEFT_HAND = 7
@@ -113,6 +113,7 @@ ball_track_results = ball_track_results[:BTR_N+1]
 # convert ball_track_results to integers
 # ball_track_results = ball_track_results.astype(int)
 camera_matrix = calib_results['cam_mat']
+# RESULTS
 # exit(0)
 rvecs = calib_results['rvecs']
 tvecs = calib_results['tvecs']
@@ -216,6 +217,9 @@ if curr_status == -1 :
         valid_left_segments.append([start_i, len(plane_points)])
 
 RESULTS = {}
+RESULTS['cam_mat'] = camera_matrix
+RESULTS['rvecs'] = rvecs
+RESULTS['tvecs'] = tvecs
 RESULTS['valid_left_segments'] = valid_left_segments
 RESULTS['valid_right_segments'] = valid_right_segments
 RESULTS['segments'] = segments
@@ -228,7 +232,174 @@ with open(video_path + '/human_pose_tracker/4DHumans/' + VIDEO_ID + '/' + VIDEO_
     metadata = json.load(f)
 
 
-def optimize_ball_bounce(ball_poses_2d,start_3d,end_3d,cam_mat,rvecs,tvecs,fps=30,g=9.81) :
+def optimize_serve_ball_bounces(ball_poses_2d,start_3d,end_3d,cam_mat,rvecs,tvecs,fps=30,g=9.81,bounce_cost_x=0., bounce_cost_y=0., bounce_cost_z=0.) :
+    """
+    Optimize the ball bounce by using the 3D ball positions and the 2D ball positions
+    
+    :param ball_poses_2d: 2D ball positions
+    :param start_3d: Start 3D position of the ball
+    :param end_3d: End 3D position of the ball
+    :param cam_mat: Camera matrix
+    :param rvecs: Rotation vectors
+    :param tvecs: Translation vectors
+    :param fps: Frames per second
+    :return: Optimized 3D positions of the ball at each frame
+    """
+    last_x = ball_poses_2d[-1,2]
+    last_y = ball_poses_2d[-1,3]
+    K = len(ball_poses_2d) - 2
+    while K > 0 and (ball_poses_2d[K,2] == last_x and ball_poses_2d[K,3] == last_y) :
+        K -= 1
+    # print(ball_poses_2d[:,2:])
+    # ball_poses_2d = ball_poses_2d[:K+2]
+    # Define optimization problem in cvxpy
+    dt = 1.0 / fps
+    N = len(ball_poses_2d)
+    opti = ca.Opti()
+    # Decision variables
+    ball_bounce_loc1 = opti.variable(2)
+    ball_bounce_loc2 = opti.variable(2)
+    ball_bounce_t1 = opti.variable()
+    ball_bounce_t2 = opti.variable()
+    
+    # Set initial values for the variables
+    opti.set_initial(ball_bounce_t1, N*dt/3.)
+    opti.set_initial(ball_bounce_t2, 2*N*dt/3.)
+    if start_3d[0] > end_3d[0] :
+        opti.set_initial(ball_bounce_loc1, np.array([-L/4.,0.]))
+        opti.set_initial(ball_bounce_loc2, np.array([-L/4.,0.]))
+    else :
+        opti.set_initial(ball_bounce_loc1, np.array([L/4.,0.]))
+        opti.set_initial(ball_bounce_loc2, np.array([L/4.,0.]))
+    
+    if start_3d[0] > end_3d[0] :
+        opti.subject_to(ball_bounce_loc2[0] >= -L/2)
+        opti.subject_to(ball_bounce_loc2[0] <= 0.)
+        opti.subject_to(ball_bounce_loc1[0] >= 0)
+        opti.subject_to(ball_bounce_loc1[0] <= L/2.)
+    else :
+        opti.subject_to(ball_bounce_loc2[0] >= 0.)
+        opti.subject_to(ball_bounce_loc2[0] <= L/2.)
+        opti.subject_to(ball_bounce_loc1[0] >= -L/2.)
+        opti.subject_to(ball_bounce_loc1[0] <= 0)
+
+    opti.subject_to(ball_bounce_loc1[1] >= -B/2)
+    opti.subject_to(ball_bounce_loc1[1] <= B/2)
+    
+    opti.subject_to(ball_bounce_loc2[1] >= -B/2)
+    opti.subject_to(ball_bounce_loc2[1] <= B/2)
+    
+    opti.subject_to(ball_bounce_t2 >= N * dt/2. + dt)
+    opti.subject_to(ball_bounce_t2 <= N * dt - 2*dt)
+    opti.subject_to(ball_bounce_t1 >= dt)
+    opti.subject_to(ball_bounce_t1 <= N * dt/2.)
+    
+    # Velocity calculations
+    ball_vel_x = (ball_bounce_loc1[0] - start_3d[0]) / ball_bounce_t1
+    ball_vel_y = (ball_bounce_loc1[1] - start_3d[1]) / ball_bounce_t1
+    ball_vel_z = (0.5 * g * ball_bounce_t1**2 + HT - start_3d[2]) / ball_bounce_t1
+    
+    ball_bounce_vel_x1 = (ball_bounce_loc2[0] - ball_bounce_loc1[0]) / (ball_bounce_t2 - ball_bounce_t1)
+    ball_bounce_vel_y1 = (ball_bounce_loc2[1] - ball_bounce_loc1[1]) / (ball_bounce_t2 - ball_bounce_t1)
+    ball_bounce_vel_z1 = (0.5 * g * (ball_bounce_t2 - ball_bounce_t1)**2) / (ball_bounce_t2 - ball_bounce_t1)
+    
+    ball_bounce_vel_x2 = (end_3d[0] - ball_bounce_loc2[0]) / (N * dt - dt - ball_bounce_t2)
+    ball_bounce_vel_y2 = (end_3d[1] - ball_bounce_loc2[1]) / (N * dt - dt - ball_bounce_t2)
+    ball_bounce_vel_z2 = (0.5 * g * (N * dt - dt - ball_bounce_t2)**2 + end_3d[2] - HT) / (N * dt - dt - ball_bounce_t2)
+    
+    # Cost function
+    cost = 0
+    for i in range(1,N-1):
+        ball_pos_2d = ca.MX(ball_poses_2d[i, 2:])
+        curr_t = i * dt
+        step_val1 = 1.0 / (1.0 + ca.exp(-100.0 * (curr_t - ball_bounce_t1)))
+        step_val2 = 1.0 / (1.0 + ca.exp(-100.0 * (curr_t - ball_bounce_t2)))
+        
+        ball_pos_3d_ = ca.vertcat(
+            start_3d[0] + ball_vel_x * curr_t,
+            start_3d[1] + ball_vel_y * curr_t,
+            start_3d[2] + ball_vel_z * curr_t - 0.5 * g * curr_t**2
+        )
+        
+        ball_pos_2d_ = project_3d_to_2d_casadi(cam_mat, rvecs, tvecs, ball_pos_3d_)
+        cost += (1.-step_val1) * ca.norm_2(ball_pos_2d - ball_pos_2d_)
+        
+        ball_pos_3d_1 = ca.vertcat(
+            ball_bounce_loc1[0] + ball_bounce_vel_x1 * (curr_t - ball_bounce_t1),
+            ball_bounce_loc1[1] + ball_bounce_vel_y1 * (curr_t - ball_bounce_t1),
+            HT + ball_bounce_vel_z1 * (curr_t - ball_bounce_t1) - 0.5 * g * (curr_t - ball_bounce_t1)**2
+        )
+        ball_pos_2d_1 = project_3d_to_2d_casadi(cam_mat, rvecs, tvecs, ball_pos_3d_1)
+        cost += step_val1 * (1-step_val2) * ca.norm_2(ball_pos_2d - ball_pos_2d_1)
+
+        ball_pos_3d_2 = ca.vertcat(
+            ball_bounce_loc2[0] + ball_bounce_vel_x2 * (curr_t - ball_bounce_t2),
+            ball_bounce_loc2[1] + ball_bounce_vel_y2 * (curr_t - ball_bounce_t2),
+            HT + ball_bounce_vel_z2 * (curr_t - ball_bounce_t2) - 0.5 * g * (curr_t - ball_bounce_t2)**2
+        )
+        ball_pos_2d_2 = project_3d_to_2d_casadi(cam_mat, rvecs, tvecs, ball_pos_3d_2)
+        cost += step_val2 * ca.norm_2(ball_pos_2d - ball_pos_2d_2)
+    cost += bounce_cost_x * (ball_vel_x-ball_bounce_vel_x1)**2 + bounce_cost_y * (ball_vel_y-ball_bounce_vel_y1)**2 + bounce_cost_z * (ball_vel_z-g*ball_bounce_t1+ball_bounce_vel_z1)**2
+    cost += bounce_cost_x * (ball_bounce_vel_x1-ball_bounce_vel_x2)**2 + bounce_cost_y * (ball_bounce_vel_y1-ball_bounce_vel_y2)**2 + bounce_cost_z * (ball_bounce_vel_z1-g*(ball_bounce_t2-ball_bounce_t1)+ball_bounce_vel_z2)**2
+    # Solve optimization problem
+    # Set objective
+    opti.minimize(cost)
+    
+    # opts = {
+    # 'ipopt.print_level': 0,
+    # 'ipopt.tol': 1e-6,
+    # 'ipopt.max_iter': 1000,
+    # 'ipopt.bound_relax_factor': 1e-3,  # Relax the box constraints slightly
+    # 'ipopt.check_derivatives_for_naninf': 'yes',  # Check derivatives
+    # 'ipopt.nlp_scaling_method': 'none',  # No scaling
+    # 'ipopt.sb': 'yes',
+    # }
+    # Solve optimization problem and do not print anything!
+    # opti.solver('ipopt', {"ipopt.accept_every_trial_step": "yes", "ipopt.mu_init": 0.03})
+
+    # solver should not print anything
+    opti.solver('ipopt', {"print_time": 0, "ipopt.print_level": 0, "ipopt.sb": "yes"})
+    try:
+        sol = opti.solve()
+        ball_bounce_loc1 = sol.value(ball_bounce_loc1)
+        ball_bounce_loc2 = sol.value(ball_bounce_loc2)
+        ball_bounce_t1 = sol.value(ball_bounce_t1)
+        ball_bounce_t2 = sol.value(ball_bounce_t2)
+    
+    except :
+        ball_bounce_loc1 = opti.debug.value(ball_bounce_loc1)
+        ball_bounce_loc2 = opti.debug.value(ball_bounce_loc2)
+        ball_bounce_t1 = opti.debug.value(ball_bounce_t1)
+        ball_bounce_t2 = opti.debug.value(ball_bounce_t2)
+        best_obj_val = opti.debug.value(cost)
+    # Extract results
+    # Use the optimized ball bounce location and time to get the 3D positions of the ball
+    ball_pos_pred_3d = []
+    # ball_bounce_loc = ball_bounce_loc.value
+    # ball_bounce_t = ball_bounce_t.value
+    ball_vel_x = (ball_bounce_loc1[0] - start_3d[0])/ball_bounce_t1
+    ball_vel_y = (ball_bounce_loc1[1] - start_3d[1])/ball_bounce_t1
+    ball_vel_z = (0.5*g*ball_bounce_t1**2 + HT - start_3d[2])/ball_bounce_t1
+
+    ball_bounce_vel_x1 = (ball_bounce_loc2[0] - ball_bounce_loc1[0]) / (ball_bounce_t2 - ball_bounce_t1)
+    ball_bounce_vel_y1 = (ball_bounce_loc2[1] - ball_bounce_loc1[1]) / (ball_bounce_t2 - ball_bounce_t1)
+    ball_bounce_vel_z1 = (0.5 * g * (ball_bounce_t2 - ball_bounce_t1)**2) / (ball_bounce_t2 - ball_bounce_t1)
+    
+    ball_bounce_vel_x2 = (end_3d[0] - ball_bounce_loc2[0]) / (N * dt - dt - ball_bounce_t2)
+    ball_bounce_vel_y2 = (end_3d[1] - ball_bounce_loc2[1]) / (N * dt - dt - ball_bounce_t2)
+    ball_bounce_vel_z2 = (0.5 * g * (N * dt - dt - ball_bounce_t2)**2 + end_3d[2] - HT) / (N * dt - dt - ball_bounce_t2)
+    for i in range(N) :
+        curr_t = i*dt
+        if curr_t < ball_bounce_t1 :
+            ball_pos_pred_3d.append([start_3d[0] + ball_vel_x*curr_t, start_3d[1] + ball_vel_y*curr_t, start_3d[2] + ball_vel_z*curr_t - 0.5*g*curr_t**2])
+        elif curr_t < ball_bounce_t2 :
+            ball_pos_pred_3d.append([ball_bounce_loc1[0] + ball_bounce_vel_x1*(curr_t-ball_bounce_t1), ball_bounce_loc1[1] + ball_bounce_vel_y1*(curr_t-ball_bounce_t1), HT + ball_bounce_vel_z1*(curr_t-ball_bounce_t1) - 0.5*g*(curr_t-ball_bounce_t1)**2])
+        else :
+            ball_pos_pred_3d.append([ball_bounce_loc2[0] + ball_bounce_vel_x2*(curr_t-ball_bounce_t2), ball_bounce_loc2[1] + ball_bounce_vel_y2*(curr_t-ball_bounce_t2), HT + ball_bounce_vel_z2*(curr_t-ball_bounce_t2) - 0.5*g*(curr_t-ball_bounce_t2)**2])
+    return np.array(ball_pos_pred_3d)
+
+
+def optimize_ball_bounce(ball_poses_2d,start_3d,end_3d,cam_mat,rvecs,tvecs,fps=30,g=9.81,bounce_cost_x=10., bounce_cost_y=10., bounce_cost_z=10.) :
     """
     Optimize the ball bounce by using the 3D ball positions and the 2D ball positions
     
@@ -264,16 +435,16 @@ def optimize_ball_bounce(ball_poses_2d,start_3d,end_3d,cam_mat,rvecs,tvecs,fps=3
         opti.set_initial(ball_bounce_loc, np.array([L/4.,0.]))
     # opti.set_initial(ball_bounce_loc, np.array([0.,0.]))
     if start_3d[0] > end_3d[0] :
-        opti.subject_to(ball_bounce_loc[0] >= -L/2)
-        opti.subject_to(ball_bounce_loc[0] <= 0.)
+        opti.subject_to(ball_bounce_loc[0] >= -L/2.+L/10.)
+        opti.subject_to(ball_bounce_loc[0] <= -L/6.)
     else :
-        opti.subject_to(ball_bounce_loc[0] >= 0.)
-        opti.subject_to(ball_bounce_loc[0] <= L/2)
+        opti.subject_to(ball_bounce_loc[0] >= L/6.)
+        opti.subject_to(ball_bounce_loc[0] <= L/2.-L/10.)
 
-    opti.subject_to(ball_bounce_loc[1] >= -B/2)
-    opti.subject_to(ball_bounce_loc[1] <= B/2)
-    opti.subject_to(ball_bounce_t >= dt)
-    opti.subject_to(ball_bounce_t <= N * dt - 2 * dt)
+    opti.subject_to(ball_bounce_loc[1] >= -0.45*B)
+    opti.subject_to(ball_bounce_loc[1] <= 0.45*B)
+    opti.subject_to(ball_bounce_t >= 2 * dt)
+    opti.subject_to(ball_bounce_t <= N * dt - 3 * dt)
     
     # Velocity calculations
     ball_vel_x = (ball_bounce_loc[0] - start_3d[0]) / ball_bounce_t
@@ -307,6 +478,7 @@ def optimize_ball_bounce(ball_poses_2d,start_3d,end_3d,cam_mat,rvecs,tvecs,fps=3
         )
         ball_pos_2d__ = project_3d_to_2d_casadi(cam_mat, rvecs, tvecs, ball_pos_3d__)
         cost += step_val * ca.norm_2(ball_pos_2d - ball_pos_2d__)
+    cost += bounce_cost_x * (ball_vel_x-ball_bounce_vel_x)**2 + bounce_cost_y * (ball_vel_y-ball_bounce_vel_y)**2 + bounce_cost_z * (ball_vel_z-g*ball_bounce_t+ball_bounce_vel_z)**2
     
     # Solve optimization problem
     # Set objective
@@ -428,6 +600,7 @@ curr_id = 0
 left_seg_opt_ball_poses = []
 n_left_players = []
 n_right_players = []
+first = True
 for seg in valid_left_segments:
     fi = seg[0]
     fl = seg[1]
@@ -477,12 +650,18 @@ for seg in valid_left_segments:
     print(dist1,dist2)
     if dist1 < DIST_THRES and dist2 < DIST_THRES :
         left_seg_opt_ball_poses.append(opt_ball_poses_3d)
+        if first :
+            opt_ball_poses_3d_left = optimize_serve_ball_bounces(ball_track_results[fi:fl],ball_pos_start_3d_,ball_pos_end_3d_,camera_matrix,rvecs,tvecs,fps)
+            first_left = fi
+            first_left_i = len(left_seg_opt_ball_poses)-1
+        first = False
     else :
         left_seg_opt_ball_poses.append(None)
 
 
 curr_id = 0
 right_seg_opt_ball_poses = []
+first = True
 for seg in valid_right_segments:
     fi = seg[0]
     fl = seg[1]
@@ -534,9 +713,18 @@ for seg in valid_right_segments:
 
     if dist1 < DIST_THRES and dist2 < DIST_THRES :
         right_seg_opt_ball_poses.append(opt_ball_poses_3d)
+        if first :
+            opt_ball_poses_3d_right = optimize_serve_ball_bounces(ball_track_results[fi:fl],ball_pos_start_3d_,ball_pos_end_3d_,camera_matrix,rvecs,tvecs,fps)
+            first_right = fi
+            first_right_i = len(right_seg_opt_ball_poses)-1
+        first = False
     else :
         right_seg_opt_ball_poses.append(None)
 
+if first_left < first_right :
+    left_seg_opt_ball_poses[first_left_i] = opt_ball_poses_3d_left
+else :
+    right_seg_opt_ball_poses[first_right_i] = opt_ball_poses_3d_right
 RESULTS['left_seg_opt_ball_poses'] = left_seg_opt_ball_poses
 RESULTS['right_seg_opt_ball_poses'] = right_seg_opt_ball_poses
 RESULTS['human_poses_3d'] = keypts_3d_rot
