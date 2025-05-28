@@ -95,7 +95,7 @@ video_path = args.folder
 
 VIDEO_ID = video_path.split('/')[-1]
 
-calib_results = np.load(video_path + '/calib__/' + VIDEO_ID + '_calib.pkl', allow_pickle=True)[0]
+calib_results = np.load(video_path + '/calib___/' + VIDEO_ID + '_calib.pkl', allow_pickle=True)[0]
 
 # ignore first line in np.loadtxt
 ball_track_results = np.loadtxt(video_path + '/ball_tracker_10/' + VIDEO_ID + '_ball.csv', delimiter=',', skiprows=1)
