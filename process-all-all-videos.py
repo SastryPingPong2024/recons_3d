@@ -5,17 +5,13 @@ import os
 import sys
 import tqdm
 import random
-
 import argparse
 
-# FOLDER = '/bluesclues-data/home/pingpong-nima/robot_table_tennis/pipeline_outputs/shared/batch_clipped_long_26'
-parser = argparse.ArgumentParser()
-parser.add_argument('--folder', default='/bluesclues-data/home/pingpong-nima/robot_table_tennis/pipeline_outputs/shared/batch_clipped_long_40', help='Location of target video file')
-# parser.add_argument('--start_id', default=0, help='Start id for saving')
-args = parser.parse_args()
-FOLDER = args.folder
-
-SAMPLE_RATIO = 1.
+FOLDER = '/bluesclues-data/home/pingpong-nima/robot_table_tennis/pipeline_outputs/shared/batch_clipped_long_'
+TOTAL_CUDA_DEVICES = 10
+for i in range(26,52):
+    FOLDER += str(i) + ' '
+    os.system('python3 process-all-videos' + FOLDER)
 
 def list_directories_by_modification_time(directory):
     # Get a list of directories

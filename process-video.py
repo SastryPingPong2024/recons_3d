@@ -189,7 +189,7 @@ if not os.path.isfile(video_path+'/video_second_clipped/'+VIDEO_ID+'.mp4'):
 cap = cv2.VideoCapture(video_path+'/video_second_clipped/'+VIDEO_ID+'.mp4')
 fps = int(cap.get(cv2.CAP_PROP_FPS))
 n_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-indices = np.loadtxt(video_path+'/metadata/second_clip_indices.txt', dtype=int, delimiter=',')
+indices = np.loadtxt(video_path+'/metadata/second_clipped_indices.txt', dtype=int, delimiter=',')
 n_frames = indices[1] - indices[0]
 # exit(0)
 # # # # # # # # # # # # # # # #
