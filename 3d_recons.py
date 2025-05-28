@@ -25,6 +25,7 @@ DIST_THRES = 0.7
 DOUBLES_FACTOR = 1.5
 MIN_FRAMES = 3
 MAX_FRAMES = 50
+DEAD_DIST_THRES = 0.1
 
 def find_closest_projected_3d_point(camera_matrix, rvecs, tvecs, image_point, query_point):
     """
@@ -104,8 +105,37 @@ ball_track_results = np.loadtxt(video_path + '/ball_tracker_10/' + VIDEO_ID + '_
 # Read second_clip_indices.txt for start and end frame of ball_track_results
 clip_indices = np.loadtxt(video_path + '/metadata/second_clipped_indices.txt', delimiter=',', max_rows=1)
 
+xs = np.array(ball_track_results[:, 2])
+ys = np.array(ball_track_results[:, 3])
+# print(xs)
+xs_ = np.argsort(xs)
+xs_sorted = xs[xs_]
+# print(xs_sorted)
+ys_sorted = ys[xs_]
+dead_x = xs_sorted[0]
+dead_y = ys_sorted[0]
+max_freq = 0
+curr_freq = 0
+prev_i = 0
+for i in range(len(xs_sorted)):
+    x_ = xs_sorted[i]
+    if int(x_) != 0:
+        if xs_sorted[prev_i] != int(x_):
+            # print(curr_freq, max_freq, xs_sorted[prev_i], ys_sorted[prev_i])
+            if curr_freq > max_freq:
+                # print(max_freq, curr_freq, dead_x, dead_y)
+                max_freq = curr_freq
+                dead_x = xs_sorted[prev_i]
+                dead_y = ys_sorted[prev_i]
+            curr_freq = 0
+        curr_freq += 1
+        
+    prev_i = i
+
 ball_track_results = ball_track_results[int(clip_indices[0]):int(clip_indices[1])]
 
+dead_pos_2d = np.array([dead_x, dead_y])
+print("Dead position in 2D:", dead_pos_2d)
 BTR_N = ball_track_results.shape[0]-1
 while ball_track_results[BTR_N,1] == 0:
     BTR_N -= 1
@@ -648,7 +678,13 @@ for seg in valid_left_segments:
     
     opt_ball_poses_3d = optimize_ball_bounce(ball_track_results[fi:fl],ball_pos_start_3d_,ball_pos_end_3d_,camera_matrix,rvecs,tvecs,fps)
     print(dist1,dist2)
-    if dist1 < DIST_THRES and dist2 < DIST_THRES :
+    dist1_dead = np.linalg.norm(ball_track_results[fi,2:] - dead_pos_2d)
+    dist2_dead = np.linalg.norm(ball_track_results[fl-1,2:] - dead_pos_2d)
+    if dist1_dead < DEAD_DIST_THRES  or dist2_dead < DEAD_DIST_THRES :
+        print('Skipping segment due to dead ball')
+        # left_seg_opt_ball_poses.append(None)
+        # continue
+    if dist1 < DIST_THRES and dist2 < DIST_THRES and dist1_dead > DEAD_DIST_THRES and dist2_dead > DEAD_DIST_THRES:
         left_seg_opt_ball_poses.append(opt_ball_poses_3d)
         if first :
             opt_ball_poses_3d_left = optimize_serve_ball_bounces(ball_track_results[fi:fl],ball_pos_start_3d_,ball_pos_end_3d_,camera_matrix,rvecs,tvecs,fps)
@@ -710,8 +746,12 @@ for seg in valid_right_segments:
     # ball_pos_end_3d[2] /= 1.2
     opt_ball_poses_3d = optimize_ball_bounce(ball_track_results[fi:fl],ball_pos_start_3d_,ball_pos_end_3d_,camera_matrix,rvecs,tvecs,fps)
     print(dist1,dist2)
-
-    if dist1 < DIST_THRES and dist2 < DIST_THRES :
+    dist1_dead = np.linalg.norm(ball_track_results[fi,2:] - dead_pos_2d)
+    dist2_dead = np.linalg.norm(ball_track_results[fl-1,2:] - dead_pos_2d)
+    if dist1_dead < DEAD_DIST_THRES  or dist2_dead < DEAD_DIST_THRES :
+        print('Skipping segment due to dead ball')
+    
+    if dist1 < DIST_THRES and dist2 < DIST_THRES and dist1_dead > DEAD_DIST_THRES and dist2_dead > DEAD_DIST_THRES:
         right_seg_opt_ball_poses.append(opt_ball_poses_3d)
         if first :
             opt_ball_poses_3d_right = optimize_serve_ball_bounces(ball_track_results[fi:fl],ball_pos_start_3d_,ball_pos_end_3d_,camera_matrix,rvecs,tvecs,fps)
@@ -862,16 +902,16 @@ if total_segments < 2 :
     print("Not enough segments")
     exit(0)
 # create a folder to save the results
-if not os.path.exists(video_path + '/3d_recons__'):
-    os.makedirs(video_path + '/3d_recons__')
+if not os.path.exists(video_path + '/3d_recons___'):
+    os.makedirs(video_path + '/3d_recons___')
 
 # Save RESULTS as pkl file in video_path + '/3d_recons/' + VIDEO_ID + '_3d_recons.pkl'
-with open(video_path + '/3d_recons__/' + VIDEO_ID + '_3d_recons.pkl', 'wb') as f:
+with open(video_path + '/3d_recons___/' + VIDEO_ID + '_3d_recons.pkl', 'wb') as f:
     pickle.dump(RESULTS, f)
 
 height, width, layers = new_frames[0].shape
 size = (width, height)
-out = cv2.VideoWriter(video_path+'/3d_recons__/'+VIDEO_ID+'_3d_recons.mp4', cv2.VideoWriter_fourcc(*'mp4v'), fps, size)
+out = cv2.VideoWriter(video_path+'/3d_recons___/'+VIDEO_ID+'_3d_recons.mp4', cv2.VideoWriter_fourcc(*'mp4v'), fps, size)
 for i in range(len(new_frames)):
     out.write(new_frames[i])
 out.release()

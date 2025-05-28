@@ -5,9 +5,16 @@ import os
 import sys
 import tqdm
 import random
+import argparse
 
-FOLDER = '/clifford-data/home/pingpong-daniel/robot_table_tennis/pipeline_outputs/shared/batch_clipped_long_26'
-SAMPLE_RATIO = 1.
+parser = argparse.ArgumentParser()
+parser.add_argument('--folder', default='batch_clipped_long_26', help='Location of target folder')
+parser.add_argument('--gpu', default=0, help='GPU to use')
+
+
+args = parser.parse_args()
+
+FOLDER = '/bluesclues-data/home/pingpong-nima/robot_table_tennis/pipeline_outputs/shared/' + args.folder
 
 def list_directories_by_modification_time(directory):
     # Get a list of directories
@@ -51,23 +58,21 @@ random.shuffle(folder_list)
 # '5CEapFU9lXI_476924_477729_0_4_2_2',
 # '5CEapFU9lXI_470954_471609_0_6_1_10']
 # LIST = ['-DNXFkdAMcM_211490_212125_1_8_0_5', '-7_7O3dusC8_994038_994603_0_2_0_2']
-os.system('mkdir -p ' + 'sampled_videos5')
+# folder_list = ['GDdHN4tpOJc_29460_29970_0_7_0_10']
+os.system('mkdir -p ' + 'sampled_videos7')
 for folder in tqdm.tqdm(folder_list):
-    n += 1
     if os.path.isdir(os.path.join(FOLDER, folder)):
         print('Processing folder:', folder)
-        source_path = os.path.join(FOLDER, folder) +'/3d_recons__/'+folder+'_3d_recons.mp4'
-        target_path = 'sampled_videos5' +'/'+folder+'_3d_recons.mp4'
+        source_path = os.path.join(FOLDER, folder) +'/3d_recons___/'+folder+'_3d_recons.mp4'
+        target_path = 'sampled_videos7' +'/'+folder+'_3d_recons.mp4'
         if os.path.exists(os.path.join(FOLDER, folder, 'human_pose_tracker')):
             print("Valid folder")
             # Run command python3 process-video.py --folder os.path.join(FOLDER, folder)
-            os.system('python3 process-video.py --folder ' + os.path.join(FOLDER, folder))
+            os.system('python3 process-video.py --folder ' + os.path.join(FOLDER, folder) + ' --gpu ' + str(args.gpu))
             print("Camera calibrated")
-            os.system('python3 3d_recons.py --folder ' + os.path.join(FOLDER, folder))
-            print("3d reconstructed")
-            if random.random() < SAMPLE_RATIO :
-                print("Saving video")
-                os.system('cp -r ' + source_path + ' ' + target_path)
+            status = os.system('python3 3d_recons.py --folder ' + os.path.join(FOLDER, folder))
+            if status == 1:
+                print("3d reconstruction successful")
         else:
             print("Invalid folder")
     # if n >= 100 :

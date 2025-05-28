@@ -36,10 +36,13 @@ max_allowed_corner_discrepancy = 30
 parser = argparse.ArgumentParser()
 parser.add_argument('--folder', default='_0pjrW7Viek', help='Location of target video file')
 parser.add_argument('--start_id', default=0, help='Start id for saving')
+parser.add_argument('--gpu', default=0, help='GPU to use')
 
 
-DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 args = parser.parse_args()
+
+DEVICE = 'cuda:' + str(int(args.gpu) % torch.cuda.device_count()) if torch.cuda.is_available() else 'cpu'
+print("Using device:", DEVICE)
 video_path = args.folder
 
 VIDEO_ID = video_path.split('/')[-1]
@@ -218,6 +221,7 @@ n_frames = indices[1] - indices[0]
 model_classifier = modify_resnet(output_size=1, activation='sigmoid') 
 model_classifier.load_state_dict(torch.load('models_class/best_model.pth'))
 model_classifier.eval()
+model_classifier.to(DEVICE)
 
 model = modify_resnet(output_size=20)
 model.load_state_dict(torch.load('models/best_model.pth'))
