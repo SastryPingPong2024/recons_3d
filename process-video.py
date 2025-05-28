@@ -14,6 +14,16 @@ import time
 import json
 import pickle
 from tqdm import tqdm
+from PIL import Image
+import torchvision.transforms as T
+
+transform = T.Compose([
+    # T.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.25),  # Adjust brightness, contrast, etc.
+    # T.GaussianBlur(kernel_size=(5, 5), sigma=(0.1, 2.0)),  # Apply Gaussian blur
+    # T.RandomAdjustSharpness(sharpness_factor=2, p=0.3),  # Sharpening effect
+    # T.RandomGrayscale(p=0.2),  # Convert to grayscale with probability 20%
+    T.ToTensor(),  # Convert to tensor
+])
 
 margin = 15
 L = 2.74  # Length
@@ -205,6 +215,10 @@ n_frames = indices[1] - indices[0]
 # <: fast backward 36 frames  #
 # # # # # # # # # # # # # # # #
 
+model_classifier = modify_resnet(output_size=1, activation='sigmoid') 
+model_classifier.load_state_dict(torch.load('models_class/best_model.pth'))
+model_classifier.eval()
+
 model = modify_resnet(output_size=20)
 model.load_state_dict(torch.load('models/best_model.pth'))
 # model.load_state_dict(torch.load('models/model_epoch_49.pth'))
@@ -283,6 +297,39 @@ def corner_label(event, x, y, flags, param):
     
         cv2.imshow('imgLabel', image)
 
+def classify_image(model_class, image, thres = 0.2):
+    h,w = image.shape[:2]
+    # Load labels
+    if w > h :
+        l = (w - h)//2
+        r = (w + h)//2
+        t = 0
+        d = h
+    else :
+        l = 0
+        r = w
+        t = (h - w)//2
+        d = (h + w)//2
+    
+    
+    
+    image = image[t:d, l:r,:]
+
+    # reshape image to (224, 224)
+    image = cv2.resize(image, (224, 224), interpolation=cv2.INTER_AREA)
+
+    # Convert from BGR to RGB color space (OpenCV uses BGR)
+    cv2_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    # print(cv2_image.shape)
+    # Convert to PIL Image
+    pil_image = Image.fromarray(cv2_image) # Shape: (H, W, C)
+    
+    image_transformed = transform(pil_image)
+    
+    pred_label = model_class(torch.tensor(image_transformed).to(DEVICE).unsqueeze(0)).detach().cpu().numpy()[0,0]
+
+    return (pred_label < thres)
+
 saved_success = False
 frame_no = 0
 _, image = cap.read()
@@ -295,6 +342,7 @@ with open(video_path + '/human_pose_tracker/4DHumans/' + VIDEO_ID + '/' + VIDEO_
 pred_corners = []
 curr_id = 0
 pts_thres = 50
+n_lets = 5 # Number of frames to skip before considering the view as top-down
 # show_image(image, 0, info[0]['x'], info[0]['y'])
 results = []
 new_frames = []
@@ -317,6 +365,12 @@ for frame_no in tqdm(range(n_frames)):
     t2 = time.time()
     try:
         if len(bounding_boxes) >= 1:
+            # Check if the view is not top-down
+            if classify_image(model_classifier, image) :
+                n_lets -= 1
+            if n_lets <= 0:
+                print("This a top-down view. Exiting...")
+                exit(0)
             if initial_frame_no == -1:
                 initial_frame_no = frame_no
             l = bounding_boxes[0][0] - margin
@@ -413,13 +467,13 @@ height, width, layers = new_frames[0].shape
 size = (width, height)
 
 # Create folder video_path/calib if it doesn't exist
-if not os.path.exists(video_path + '/calib__'):
-    os.makedirs(video_path + '/calib__')
-out = cv2.VideoWriter(video_path + '/calib__/' + VIDEO_ID + '_calib.mp4', cv2.VideoWriter_fourcc(*'mp4v'), fps, size)
+if not os.path.exists(video_path + '/calib___'):
+    os.makedirs(video_path + '/calib___')
+out = cv2.VideoWriter(video_path + '/calib___/' + VIDEO_ID + '_calib.mp4', cv2.VideoWriter_fourcc(*'mp4v'), fps, size)
 for i in range(len(new_frames)):
     out.write(new_frames[i])
 out.release()
 
 # save results in a pkl file
-with open(video_path + '/calib__/' + VIDEO_ID + '_calib.pkl', 'wb') as f:
+with open(video_path + '/calib___/' + VIDEO_ID + '_calib.pkl', 'wb') as f:
     pickle.dump(results, f)

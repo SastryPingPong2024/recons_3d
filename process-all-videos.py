@@ -51,14 +51,14 @@ print("Shuffled")
 # '5CpoadRv32Q_339426_339936_0_6_0_4',
 # '5CEapFU9lXI_476924_477729_0_4_2_2',
 # '5CEapFU9lXI_470954_471609_0_6_1_10']
-LIST = ['-DNXFkdAMcM_211490_212125_1_8_0_5', '-7_7O3dusC8_994038_994603_0_2_0_2']
-os.system('mkdir -p ' + 'sampled_videos4')
+# LIST = ['-DNXFkdAMcM_211490_212125_1_8_0_5', '-7_7O3dusC8_994038_994603_0_2_0_2']
+os.system('mkdir -p ' + 'sampled_videos5')
 for folder in tqdm.tqdm(folder_list):
     n += 1
     if os.path.isdir(os.path.join(FOLDER, folder)):
         print('Processing folder:', folder)
         source_path = os.path.join(FOLDER, folder) +'/3d_recons__/'+folder+'_3d_recons.mp4'
-        target_path = 'sampled_videos4' +'/'+folder+'_3d_recons.mp4'
+        target_path = 'sampled_videos5' +'/'+folder+'_3d_recons.mp4'
         if os.path.exists(os.path.join(FOLDER, folder, 'human_pose_tracker')):
             print("Valid folder")
             # Run command python3 process-video.py --folder os.path.join(FOLDER, folder)

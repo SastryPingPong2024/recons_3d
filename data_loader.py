@@ -158,7 +158,100 @@ class TableTennisDataset(Dataset):
         # image_transformed = T.ToTensor()(image_transformed)  # Shape: (3, H, W)
         # image = transform(image)
         return image_transformed, label
+
+
+class TableTennisClassificationDataset(Dataset):
+    def __init__(self, data_root, transform=None, augment=True):
+        """
+        Args:
+            data_root (string): Root directory of the dataset.
+                                Should contain folders like match1, match2, etc.
+            transform (callable, optional): Optional transform to be applied
+                                            on a sample.
+        """
+        self.data_root = data_root
+        if augment:
+            suffix = '_aug'
+        else: 
+            suffix = ''
+        self.images_root = os.path.join(data_root, 'images'+suffix)
+        self.images_dv_root = os.path.join(data_root, 'images_dv'+suffix)
+        # self.labels_root = os.path.join(data_root, 'labels'+suffix)
+        self.transform = transform
+        self.samples_true = []
+        self.samples_false = []
+
+        # Collect all frame and label paths
+        for item in os.listdir(self.images_root):
+            image_path = os.path.join(self.images_root, item)
+            self.samples_true.append({
+                'image_path': image_path,
+            })
+        
+        # Collect all frame and label paths
+        for item in os.listdir(self.images_dv_root):
+            image_path = os.path.join(self.images_dv_root, item)
+            self.samples_false.append({
+                'image_path': image_path,
+            })
+        
+        # Total number of frames
+        self.total_frames = len(self.samples_true) + len(self.samples_false)
     
+    def __len__(self):
+        return self.total_frames
+    
+    def __getitem__(self, idx):
+        
+        if idx < len(self.samples_true):
+            label = 1.
+            # Get sample information
+            sample_info = self.samples_true[idx]
+        
+        else :
+            label = 0.
+            idx -= len(self.samples_true)
+            # Get sample information
+            sample_info = self.samples_false[idx]
+        frame_path = sample_info['image_path']
+        # print(frame_path, label_path)
+        # Load frame
+        frame = cv2.imread(frame_path, cv2.IMREAD_UNCHANGED)
+        w = frame.shape[1]
+        h = frame.shape[0]
+        
+        # Load labels
+        if w > h :
+            l = (w - h)//2
+            r = (w + h)//2
+            t = 0
+            d = h
+        else :
+            l = 0
+            r = w
+            t = (h - w)//2
+            d = (h + w)//2
+        
+        
+        
+        image = frame[t:d, l:r,:]
+
+        # reshape image to (224, 224)
+        image = cv2.resize(image, (224, 224), interpolation=cv2.INTER_AREA)
+
+        # Convert from BGR to RGB color space (OpenCV uses BGR)
+        cv2_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        # print(cv2_image.shape)
+        # Convert to PIL Image
+        pil_image = Image.fromarray(cv2_image) # Shape: (H, W, C)
+        
+        image_transformed = transform(pil_image)
+        
+        # flatten label and convert to float
+        # label = label.astype(np.float32)
+
+        return image_transformed, label
+
 if __name__ == "__main__":
     # Define the dataset
     dataset = TableTennisDataset(data_root='dataset/train/')

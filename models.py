@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.models as models
 
-def modify_resnet(output_size=10):
+def modify_resnet(output_size=10, activation='none'):
     # Load a pre-trained ResNet model
     resnet = models.resnet50(pretrained=True)
     
@@ -13,6 +13,12 @@ def modify_resnet(output_size=10):
     # Replace the fully connected layer with a custom layer
     resnet.fc = nn.Linear(in_features, output_size)
     
+    # if activation is sigmoid, add a sigmoid activation function
+    if activation == 'sigmoid':
+        resnet.fc = nn.Sequential(
+            resnet.fc,
+            nn.Sigmoid()
+        )
     return resnet
 
 
